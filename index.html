@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Greenwich Home">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <title>Greenwich Home</title>
+  <style>
+    :root{color-scheme:dark;--bg:#101827;--panel:#1b2738;--muted:#a8b4c5;--green:#54d69a;--amber:#ffbf69;--red:#ff7777}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top,#26384f 0,#101827 58%);color:#f7f9fc;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;justify-content:center;align-items:center;padding:24px 18px calc(24px + env(safe-area-inset-bottom))}
+    main{width:min(100%,440px)} .eyebrow{color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;text-align:center}
+    .card{margin-top:18px;background:rgba(27,39,56,.94);border:1px solid rgba(255,255,255,.1);border-radius:28px;padding:28px 24px;box-shadow:0 22px 70px #0006}
+    .choice{font-size:clamp(38px,11vw,54px);line-height:1.02;font-weight:850;letter-spacing:-.055em;text-align:center;margin:20px 0 10px}
+    .choice.cannon{color:var(--green)}.choice.dlr{color:var(--amber)}.choice.wait{font-size:32px;color:#f7f9fc}
+    .sub{text-align:center;color:var(--muted);line-height:1.45;min-height:46px}
+    .rule{height:1px;background:#ffffff18;margin:24px 0}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stat{background:#ffffff08;border-radius:16px;padding:14px}.stat small{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.stat strong{font-size:21px;font-variant-numeric:tabular-nums}
+    .detail{margin-top:16px;color:var(--muted);font-size:13px;line-height:1.5;text-align:center;min-height:38px}
+    button{display:block;width:100%;border:0;border-radius:15px;padding:16px;background:#f4f7fb;color:#142033;font-size:16px;font-weight:750;margin-top:22px;cursor:pointer}button:disabled{opacity:.55}
+    .foot{text-align:center;color:#8492a6;font-size:11px;line-height:1.5;margin:18px 10px 0}.status{display:flex;align-items:center;justify-content:center;gap:7px;color:var(--muted);font-size:12px;margin-top:18px}.dot{width:7px;height:7px;border-radius:50%;background:var(--green)}.dot.bad{background:var(--red)}
+    a{color:#c5d7f2}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Your route home · from the office</div>
+  <section class="card" aria-live="polite">
+    <div id="choice" class="choice wait">CHECKING…</div>
+    <div id="subtitle" class="sub">Checking live trains from Cannon Street to Greenwich.</div>
+    <div class="rule"></div>
+    <div class="stats">
+      <div class="stat"><small>Estimated arrival at Cannon Street</small><strong id="arrival">—</strong></div>
+      <div class="stat"><small>Next suitable train</small><strong id="departure">—</strong></div>
+      <div class="stat"><small>Expected wait</small><strong id="wait">—</strong></div>
+      <div class="stat"><small>Walk assumed</small><strong>15 min</strong></div>
+    </div>
+    <div id="detail" class="detail">A train must be predicted to leave after you arrive and within 10 minutes of that arrival.</div>
+    <button id="refresh">Refresh live trains</button>
+    <div class="status"><span id="dot" class="dot"></span><span id="status">Fetching live departures…</span></div>
+  </section>
+  <div class="foot">Live departure data supplied by traini.ac, derived from Network Rail and National Rail feeds. Check station boards before travelling. Personal, non-commercial use.</div>
+</main>
+<script>
+(() => {
+  const WALK_MINUTES = 15;
+  const MAX_WAIT_MINUTES = 10;
+  const API = 'https://api.traini.ac/v1/departures/CST?calling_at=GNW&limit=100';
+  const $ = id => document.getElementById(id);
+  const fmt = d => new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/London'}).format(d);
+  const mins = n => `${Math.max(0,Math.round(n))} min`;
+  function setChoice(kind,title,subtitle){$('choice').className=`choice ${kind}`;$('choice').textContent=title;$('subtitle').textContent=subtitle;}
+  function getDepartureTime(dep){
+    const e=dep?.departs?.estimate;
+    if(e?.type==='forecast' || e?.type==='actual') return e.at ? new Date(e.at) : null;
+    if(e?.type==='no_information') return dep?.departs?.scheduled ? new Date(dep.departs.scheduled) : null;
+    return null; // cancelled or delayed with no estimate: don't promise a train
+  }
+  function callsAtGreenwich(dep){
+    return (dep.calling_points||[]).some(p => p.station?.crs==='GNW' || /greenwich/i.test(p.station?.name||''));
+  }
+  async function refresh(){
+    const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live departures…';$('dot').className='dot';
+    setChoice('wait','CHECKING…','Checking live trains from Cannon Street to Greenwich.');
+    try{
+      const response=await fetch(API,{cache:'no-store'});
+      if(!response.ok) throw new Error(`Train data service returned ${response.status}`);
+      const payload=await response.json();
+      if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected train data response');
+      const now=new Date();const arrival=new Date(now.getTime()+WALK_MINUTES*60000);const deadline=new Date(arrival.getTime()+MAX_WAIT_MINUTES*60000);
+      const candidates=payload.data.filter(d=>d.advertised!==false && d.service_class==='passenger' && callsAtGreenwich(d))
+        .map(d=>({raw:d,time:getDepartureTime(d)})).filter(x=>x.time && x.time>=arrival && x.time<=deadline)
+        .sort((a,b)=>a.time-b.time);
+      $('arrival').textContent=fmt(arrival);
+      if(candidates.length){
+        const next=candidates[0];const wait=(next.time-arrival)/60000;
+        setChoice('cannon','CANNON STREET','You should make the next suitable train to Greenwich.');
+        $('departure').textContent=fmt(next.time);$('wait').textContent=mins(wait);
+        const platform=next.raw.platform?.type==='known'?` · Platform ${next.raw.platform.number}`:'';
+        const delay=next.raw.departs.delay_minutes;
+        $('detail').textContent=`Predicted departure ${fmt(next.time)}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
+      }else{
+        setChoice('dlr','TAKE THE DLR','No suitable Cannon Street train is currently predicted within your window.');
+        $('departure').textContent='None';$('wait').textContent='Over 10 min';
+        $('detail').textContent='Head to Bank for the DLR to Greenwich. If train information is incomplete, the DLR is the safer recommendation.';
+      }
+      $('status').textContent=`Updated ${fmt(new Date())} · London time`;$('dot').className='dot';
+    }catch(err){
+      setChoice('dlr','TAKE THE DLR','I couldn’t verify a suitable live Cannon Street train.');
+      $('arrival').textContent='—';$('departure').textContent='Unavailable';$('wait').textContent='—';
+      $('detail').textContent='Live train data could not be reached, so this app is falling back to the DLR rather than guessing.';
+      $('status').textContent=`Live data unavailable: ${err.message}`;$('dot').className='dot bad';
+    }finally{btn.disabled=false;}
+  }
+  $('refresh').addEventListener('click',refresh);
+  if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+  refresh();
+})();
+</script>
+</body>
+</html>
