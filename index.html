@@ -61,16 +61,23 @@
     return null; // cancelled or delayed with no estimate: don't promise a train
   }
   function callsAtGreenwich(dep){
-    return (dep.calling_points||[]).some(p => p.station?.crs==='GNW' || /greenwich/i.test(p.station?.name||''));
+    // Require an explicit Greenwich stop in the individual train's calling points.
+    // The API-side calling_at=GNW filter is an additional, independent safeguard.
+    return Array.isArray(dep.calling_points) && dep.calling_points.some(p =>
+      p.station?.type === 'station' && (p.station.crs === 'GNW' || p.station.name?.trim().toLowerCase() === 'greenwich')
+    );
   }
   async function refresh(){
     const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live departures…';$('dot').className='dot';
-    setChoice('wait','CHECKING…','Checking live trains from Cannon Street to Greenwich.');
+    setChoice('wait','CHECKING…','Checking live trains and verifying each train stops at Greenwich.');
     try{
       const response=await fetch(API,{cache:'no-store'});
       if(!response.ok) throw new Error(`Train data service returned ${response.status}`);
       const payload=await response.json();
       if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected train data response');
+      // Fail closed: confirm the API resolved calling_at to Greenwich before trusting its filtered board.
+      const resolvedCall = payload.request?.calling_at?.resolution;
+      if(resolvedCall?.type !== 'station' || resolvedCall.crs !== 'GNW') throw new Error('The live feed did not confirm Greenwich as the calling point filter.');
       const now=new Date();const arrival=new Date(now.getTime()+WALK_MINUTES*60000);const deadline=new Date(arrival.getTime()+MAX_WAIT_MINUTES*60000);
       const candidates=payload.data.filter(d=>d.advertised!==false && d.service_class==='passenger' && callsAtGreenwich(d))
         .map(d=>({raw:d,time:getDepartureTime(d)})).filter(x=>x.time && x.time>=arrival && x.time<deadline)
@@ -84,13 +91,13 @@
         const delay=next.raw.departs.delay_minutes;
         $('detail').textContent=`Predicted departure ${fmt(next.time)}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
       }else{
-        setChoice('dlr','TAKE THE DLR','No Cannon Street train is predicted within 10 minutes of your arrival.');
+        setChoice('dlr','TAKE THE DLR','No verified Greenwich-stopping Cannon Street train is predicted within 10 minutes of your arrival.');
         $('departure').textContent='None';$('wait').textContent='10+ min';
-        $('detail').textContent='Head to Bank for the DLR to Greenwich. If train information is incomplete, the DLR is the safer recommendation.';
+        $('detail').textContent='Head to Bank for the DLR to Greenwich. Only trains with an explicit Greenwich calling point are considered. If that cannot be verified, take the DLR.';
       }
       $('status').textContent=`Updated ${fmt(new Date())} · London time`;$('dot').className='dot';
     }catch(err){
-      setChoice('dlr','TAKE THE DLR','I couldn’t verify a suitable live Cannon Street train.');
+      setChoice('dlr','TAKE THE DLR','I couldn’t verify that a Cannon Street train stops at Greenwich.');
       $('arrival').textContent='—';$('departure').textContent='Unavailable';$('wait').textContent='—';
       $('detail').textContent='Live train data could not be reached, so this app is falling back to the DLR rather than guessing.';
       $('status').textContent=`Live data unavailable: ${err.message}`;$('dot').className='dot bad';

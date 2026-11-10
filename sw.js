@@ -1,4 +1,4 @@
-const CACHE = 'greenwich-home-v2';
+const CACHE = 'greenwich-home-v3';
 const APP_FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));
@@ -8,10 +8,13 @@ self.addEventListener('activate', event => {
 });
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (url.origin === self.location.origin) {
-    event.respondWith(fetch(event.request).then(response => {
-      if (response.ok) { const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); }
-      return response;
-    }).catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html'))));
-  }
+  if (url.origin !== self.location.origin) return;
+  // Always try the network first so new app versions appear promptly; use cache only offline.
+  event.respondWith(fetch(event.request, {cache: 'no-store'}).then(response => {
+    if (response.ok && event.request.method === 'GET') {
+      const copy = response.clone();
+      caches.open(CACHE).then(cache => cache.put(event.request, copy));
+    }
+    return response;
+  }).catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html'))));
 });
