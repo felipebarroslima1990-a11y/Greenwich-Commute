@@ -20,7 +20,7 @@
     .sub{text-align:center;color:var(--muted);line-height:1.45;min-height:46px}
     .rule{height:1px;background:#ffffff18;margin:24px 0}
     .stats{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stat{background:#ffffff08;border-radius:16px;padding:14px}.stat small{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}.stat strong{font-size:21px;font-variant-numeric:tabular-nums}
-    .detail{margin-top:16px;color:var(--muted);font-size:13px;line-height:1.5;text-align:center;min-height:38px}
+    .board{margin-top:14px;padding:16px 18px;background:#ffffff0b;border:1px solid #ffffff14;border-radius:16px;text-align:center}.board small{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.board strong{display:block;font-size:25px;letter-spacing:-.02em}.board span{display:block;color:var(--muted);font-size:12px;margin-top:5px}.board .via-label{margin-top:13px;font-size:11px;letter-spacing:.08em;text-transform:uppercase}.board .via{font-size:15px;line-height:1.4;color:#e4ebf5;margin-top:5px}.detail{margin-top:16px;color:var(--muted);font-size:13px;line-height:1.5;text-align:center;min-height:38px}
     button{display:block;width:100%;border:0;border-radius:15px;padding:16px;background:#f4f7fb;color:#142033;font-size:16px;font-weight:750;margin-top:22px;cursor:pointer}button:disabled{opacity:.55}
     .foot{text-align:center;color:#8492a6;font-size:11px;line-height:1.5;margin:18px 10px 0}.status{display:flex;align-items:center;justify-content:center;gap:7px;color:var(--muted);font-size:12px;margin-top:18px}.dot{width:7px;height:7px;border-radius:50%;background:var(--green)}.dot.bad{background:var(--red)}
     a{color:#c5d7f2}
@@ -31,7 +31,7 @@
   <div class="eyebrow">Your route home · from the office</div>
   <section class="card" aria-live="polite">
     <div id="choice" class="choice wait">CHECKING…</div>
-    <div id="subtitle" class="sub">Checking live trains from Cannon Street to Greenwich.</div>
+    <div id="subtitle" class="sub">Checking direct live journeys from Cannon Street to Greenwich.</div>
     <div class="rule"></div>
     <div class="stats">
       <div class="stat"><small>Estimated arrival at Cannon Street</small><strong id="arrival">—</strong></div>
@@ -39,6 +39,7 @@
       <div class="stat"><small>Expected wait</small><strong id="wait">—</strong></div>
       <div class="stat"><small>Walk assumed</small><strong>15 min</strong></div>
     </div>
+    <div class="board"><small>Destination as shown on the station board</small><strong id="boardDestination">—</strong><span id="boardTrain">Matching the exact train service</span><small class="via-label">Via / calling points</small><div id="boardVia" class="via">—</div></div>
     <div id="detail" class="detail">A train must be predicted to leave after you arrive, with a wait of less than 10 minutes.</div>
     <button id="refresh">Refresh live trains</button>
     <div class="status"><span id="dot" class="dot"></span><span id="status">Fetching live departures…</span></div>
@@ -49,56 +50,85 @@
 (() => {
   const WALK_MINUTES = 15;
   const MAX_WAIT_MINUTES = 10;
-  const API = 'https://api.traini.ac/v1/departures/CST?calling_at=GNW&limit=100';
+  const API = 'https://api.traini.ac/v1/journey/CST/GNW';
   const $ = id => document.getElementById(id);
   const fmt = d => new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/London'}).format(d);
   const mins = n => `${Math.max(0,Math.round(n))} min`;
   function setChoice(kind,title,subtitle){$('choice').className=`choice ${kind}`;$('choice').textContent=title;$('subtitle').textContent=subtitle;}
   function getDepartureTime(dep){
-    const e=dep?.departs?.estimate;
+    const e=dep?.estimate;
     if(e?.type==='forecast' || e?.type==='actual') return e.at ? new Date(e.at) : null;
-    if(e?.type==='no_information') return dep?.departs?.scheduled ? new Date(dep.departs.scheduled) : null;
+    if(e?.type==='no_information') return dep?.scheduled ? new Date(dep.scheduled) : null;
     return null; // cancelled or delayed with no estimate: don't promise a train
   }
-  function callsAtGreenwich(dep){
-    // Require an explicit Greenwich stop in the individual train's calling points.
-    // The API-side calling_at=GNW filter is an additional, independent safeguard.
-    return Array.isArray(dep.calling_points) && dep.calling_points.some(p =>
-      p.station?.type === 'station' && (p.station.crs === 'GNW' || p.station.name?.trim().toLowerCase() === 'greenwich')
-    );
+  function isVerifiedDirectGreenwichJourney(journey){
+    // The journey endpoint must explicitly return a direct passenger leg CST -> GNW.
+    // Do not infer the route from a destination name, headcode, or departure-board text.
+    if(journey?.type !== 'direct') return false;
+    const leg=journey.leg;
+    return leg?.service_class === 'passenger'
+      && leg.from?.type === 'station' && leg.from.crs === 'CST'
+      && leg.to?.type === 'station' && leg.to.crs === 'GNW';
   }
   async function refresh(){
-    const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live departures…';$('dot').className='dot';
-    setChoice('wait','CHECKING…','Checking live trains and verifying each train stops at Greenwich.');
+    const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live trains…';$('dot').className='dot';
+    setChoice('wait','CHECKING…','Checking direct Cannon Street to Greenwich journeys.');
+    $('boardDestination').textContent='—';$('boardTrain').textContent='Matching the exact train service';$('boardVia').textContent='Checking the train’s calling points';
     try{
-      const response=await fetch(API,{cache:'no-store'});
+      const now=new Date();
+      const arrival=new Date(now.getTime()+WALK_MINUTES*60000);
+      const deadline=new Date(arrival.getTime()+MAX_WAIT_MINUTES*60000);
+      const url=`${API}?max_changes=0&from_time=${encodeURIComponent(fmt(arrival))}&limit=100`;
+      const response=await fetch(url,{cache:'no-store'});
       if(!response.ok) throw new Error(`Train data service returned ${response.status}`);
       const payload=await response.json();
-      if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected train data response');
-      // Fail closed: confirm the API resolved calling_at to Greenwich before trusting its filtered board.
-      const resolvedCall = payload.request?.calling_at?.resolution;
-      if(resolvedCall?.type !== 'station' || resolvedCall.crs !== 'GNW') throw new Error('The live feed did not confirm Greenwich as the calling point filter.');
-      const now=new Date();const arrival=new Date(now.getTime()+WALK_MINUTES*60000);const deadline=new Date(arrival.getTime()+MAX_WAIT_MINUTES*60000);
-      const candidates=payload.data.filter(d=>d.advertised!==false && d.service_class==='passenger' && callsAtGreenwich(d))
-        .map(d=>({raw:d,time:getDepartureTime(d)})).filter(x=>x.time && x.time>=arrival && x.time<deadline)
+      if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected journey data response');
+      // Fail closed: only accept a direct passenger leg whose resolved station codes are CST and GNW.
+      const candidates=payload.data.filter(isVerifiedDirectGreenwichJourney)
+        .map(j=>({raw:j.leg,time:getDepartureTime(j.departs)}))
+        .filter(x=>x.time && x.time>=arrival && x.time<deadline)
         .sort((a,b)=>a.time-b.time);
       $('arrival').textContent=fmt(arrival);
       if(candidates.length){
         const next=candidates[0];const wait=(next.time-arrival)/60000;
+        // The journey endpoint verifies the CST-GNW stop. Separately read the CST departure board
+        // to display the train's advertised destination, matching the exact service by train id.
+        let boardRow=null;
+        try {
+          const boardUrl=`https://api.traini.ac/v1/departures/CST?from_time=${encodeURIComponent(fmt(arrival))}&limit=100`;
+          const boardResponse=await fetch(boardUrl,{cache:'no-store'});
+          if(boardResponse.ok){
+            const boardPayload=await boardResponse.json();
+            if(boardPayload.type==='ok' && Array.isArray(boardPayload.data)){
+              boardRow=boardPayload.data.find(d=>d.train?.id && d.train.id===next.raw.train?.id) || null;
+            }
+          }
+        } catch (_) { /* Board label is helpful context, not the route-verification source. */ }
+        $('boardDestination').textContent=boardRow?.destination?.name || 'Not available';
+        // traini.ac exposes the departure's ordered calling_points rather than a separate
+        // verbatim National Rail 'via' string. Show those stops so Greenwich is visible.
+        const calls=(boardRow?.calling_points||[]).map(p=>p.station?.name).filter(Boolean);
+        $('boardVia').textContent=calls.length ? calls.join(' · ') : 'Calling points unavailable';
+        const boardHeadcode=boardRow?.train?.headcode || next.raw.train?.headcode;
+        const boardPlatform=boardRow?.platform?.type==='known'?` · Platform ${boardRow.platform.number}`:'';
+        $('boardTrain').textContent=`${boardHeadcode ? `Train ${boardHeadcode}` : 'Train reference unavailable'}${boardPlatform}`;
         setChoice('cannon','CANNON STREET','You should make the next suitable train to Greenwich.');
         $('departure').textContent=fmt(next.time);$('wait').textContent=mins(wait);
         const platform=next.raw.platform?.type==='known'?` · Platform ${next.raw.platform.number}`:'';
         const delay=next.raw.departs.delay_minutes;
-        $('detail').textContent=`Predicted departure ${fmt(next.time)}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
+        const headcode=next.raw.train?.headcode ? ` · Train ${next.raw.train.headcode}` : '';
+        $('detail').textContent=`Verified to call at Greenwich · ${fmt(next.time)}${headcode}${platform}. The destination above is the train's advertised final destination, not its calling-point list. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
       }else{
-        setChoice('dlr','TAKE THE DLR','No verified Greenwich-stopping Cannon Street train is predicted within 10 minutes of your arrival.');
+        setChoice('dlr','TAKE THE DLR','No verified direct Cannon Street–Greenwich train is predicted within 10 minutes of your arrival.');
         $('departure').textContent='None';$('wait').textContent='10+ min';
-        $('detail').textContent='Head to Bank for the DLR to Greenwich. Only trains with an explicit Greenwich calling point are considered. If that cannot be verified, take the DLR.';
+        $('boardDestination').textContent='—';$('boardTrain').textContent='No suitable train identified';$('boardVia').textContent='—';
+        $('detail').textContent='Head to Bank for the DLR to Greenwich. Only direct passenger journeys explicitly identified as CST to GNW are considered. If that cannot be verified, take the DLR.';
       }
       $('status').textContent=`Updated ${fmt(new Date())} · London time`;$('dot').className='dot';
     }catch(err){
       setChoice('dlr','TAKE THE DLR','I couldn’t verify that a Cannon Street train stops at Greenwich.');
       $('arrival').textContent='—';$('departure').textContent='Unavailable';$('wait').textContent='—';
+      $('boardDestination').textContent='—';$('boardTrain').textContent='Train details unavailable';$('boardVia').textContent='Calling points unavailable';
       $('detail').textContent='Live train data could not be reached, so this app is falling back to the DLR rather than guessing.';
       $('status').textContent=`Live data unavailable: ${err.message}`;$('dot').className='dot bad';
     }finally{btn.disabled=false;}

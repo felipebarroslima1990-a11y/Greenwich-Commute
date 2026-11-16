@@ -1,16 +1,15 @@
-# Greenwich Home — first prototype
+# Greenwich Home (v6)
 
-A tiny installable web app that opens straight to a DLR vs Cannon Street recommendation.
+A small home-screen web app for choosing between Cannon Street and the DLR when leaving the office.
 
-## Current assumptions
-- Office → Cannon Street platforms: **15 minutes**
-- Maximum acceptable wait after reaching Cannon Street: **10 minutes**
-- Cannon Street station code: `CST`
-- Greenwich station code: `GNW`
-- Live data: `https://api.traini.ac/v1/departures/CST?calling_at=GNW&limit=100`
+## Decision rule
+- Assumes a 15-minute walk from the office to Cannon Street platforms.
+- Recommends Cannon Street only when a direct passenger journey from station code CST to station code GNW is explicitly returned by the traini.ac journey API, and its predicted departure is after estimated arrival but less than 10 minutes later.
+- Connecting journeys, other destinations, missing route information, API errors, and unverified results are rejected; the app recommends the DLR instead.
+- Uses live data and refreshes when opened or when the refresh button is tapped.
+- Separately reads the Cannon Street departure board and matches the exact train by train ID to display its advertised destination, platform/headcode, and ordered calling points. The API does not document a separate verbatim passenger-facing “via” string, so the app labels the ordered stops “Via / calling points”; this makes the Greenwich stop visible without pretending to reproduce the exact board wording. The journey endpoint remains the source for checking the Greenwich stop.
 
 ## Deploy
-Upload all five files in this folder to the root of a static HTTPS site: `index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, and `README.md` (README is optional). Then open the HTTPS site in Safari on iPhone → Share → Add to Home Screen.
+Upload the contents of the `greenwich-commute-app` folder to the existing Netlify site (publish directory `.`). This is v4 and uses a new service-worker cache name to avoid retaining the old app cache.
 
-## Data source note
-This prototype uses traini.ac's browser-accessible REST API. It is a third-party service, so live-data availability and its terms should be checked before relying on it. The app falls back to the DLR if the service cannot be reached or no qualifying train is found.
+Personal, non-commercial use. Live data from traini.ac.
