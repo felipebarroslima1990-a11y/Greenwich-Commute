@@ -31,7 +31,7 @@
   <div class="eyebrow">Your route home · from the office</div>
   <section class="card" aria-live="polite">
     <div id="choice" class="choice wait">CHECKING…</div>
-    <div id="subtitle" class="sub">Checking direct live journeys from Cannon Street to Greenwich.</div>
+    <div id="subtitle" class="sub">Checking Cannon Street departures for Deptford → Greenwich → Maze Hill in that order.</div>
     <div class="rule"></div>
     <div class="stats">
       <div class="stat"><small>Estimated arrival at Cannon Street</small><strong id="arrival">—</strong></div>
@@ -50,7 +50,7 @@
 (() => {
   const WALK_MINUTES = 15;
   const MAX_WAIT_MINUTES = 10;
-  const API = 'https://api.traini.ac/v1/journey/CST/GNW';
+  const API = 'https://api.traini.ac/v1/departures/CST';
   const $ = id => document.getElementById(id);
   const fmt = d => new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/London'}).format(d);
   const mins = n => `${Math.max(0,Math.round(n))} min`;
@@ -61,49 +61,53 @@
     if(e?.type==='no_information') return dep?.scheduled ? new Date(dep.scheduled) : null;
     return null; // cancelled or delayed with no estimate: don't promise a train
   }
-  function isVerifiedDirectGreenwichJourney(journey){
-    // The journey endpoint must explicitly return a direct passenger leg CST -> GNW.
-    // Do not infer the route from a destination name, headcode, or departure-board text.
-    if(journey?.type !== 'direct') return false;
-    const leg=journey.leg;
-    return leg?.service_class === 'passenger'
-      && leg.from?.type === 'station' && leg.from.crs === 'CST'
-      && leg.to?.type === 'station' && leg.to.crs === 'GNW';
+  function eventTime(event){
+    const e=event?.estimate;
+    if(e?.type==='forecast' || e?.type==='actual') return e.at ? new Date(e.at) : null;
+    if(e?.type==='no_information') return event?.scheduled ? new Date(event.scheduled) : null;
+    return null;
+  }
+  function hasForwardGreenwichRoute(departure){
+    const leaves=eventTime(departure?.departs);
+    if(!leaves) return false;
+    // Check only this Cannon Street departure's own forward calling points.
+    // The required directional fingerprint is Deptford -> Greenwich -> Maze Hill.
+    // This rejects a return working where the same train later visits these
+    // stations in the opposite order. The stations need not be consecutive.
+    const calls=(departure?.calling_points||[]).filter(point => {
+      if(point?.station?.type!=='station') return false;
+      const at=eventTime(point.time);
+      return !!at && at > leaves;
+    });
+    const codes=calls.map(point=>point.station.crs);
+    const deptford=codes.indexOf('DFP');
+    const greenwich=deptford>=0 ? codes.indexOf('GNW',deptford+1) : -1;
+    const mazeHill=greenwich>=0 ? codes.indexOf('MZH',greenwich+1) : -1;
+    return deptford>=0 && greenwich>deptford && mazeHill>greenwich;
   }
   async function refresh(){
     const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live trains…';$('dot').className='dot';
-    setChoice('wait','CHECKING…','Checking direct Cannon Street to Greenwich journeys.');
+    setChoice('wait','CHECKING…','Checking Cannon Street departures for the correct forward station sequence.');
     $('boardDestination').textContent='—';$('boardTrain').textContent='Matching the exact train service';$('boardVia').textContent='Checking the train’s calling points';
     try{
       const now=new Date();
       const arrival=new Date(now.getTime()+WALK_MINUTES*60000);
       const deadline=new Date(arrival.getTime()+MAX_WAIT_MINUTES*60000);
-      const url=`${API}?max_changes=0&from_time=${encodeURIComponent(fmt(arrival))}&limit=100`;
+      const url=`${API}?calling_at=GNW&from_time=${encodeURIComponent(fmt(arrival))}&limit=100`;
       const response=await fetch(url,{cache:'no-store'});
       if(!response.ok) throw new Error(`Train data service returned ${response.status}`);
       const payload=await response.json();
       if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected journey data response');
-      // Fail closed: only accept a direct passenger leg whose resolved station codes are CST and GNW.
-      const candidates=payload.data.filter(isVerifiedDirectGreenwichJourney)
-        .map(j=>({raw:j.leg,time:getDepartureTime(j.departs)}))
+      // Fail closed: accept only passenger departures whose own forward calling-point
+      // list contains Greenwich at a time after departure from Cannon Street.
+      const candidates=payload.data.filter(d=>d.service_class==='passenger' && hasForwardGreenwichRoute(d))
+        .map(d=>({raw:d,time:getDepartureTime(d.departs)}))
         .filter(x=>x.time && x.time>=arrival && x.time<deadline)
         .sort((a,b)=>a.time-b.time);
       $('arrival').textContent=fmt(arrival);
       if(candidates.length){
         const next=candidates[0];const wait=(next.time-arrival)/60000;
-        // The journey endpoint verifies the CST-GNW stop. Separately read the CST departure board
-        // to display the train's advertised destination, matching the exact service by train id.
-        let boardRow=null;
-        try {
-          const boardUrl=`https://api.traini.ac/v1/departures/CST?from_time=${encodeURIComponent(fmt(arrival))}&limit=100`;
-          const boardResponse=await fetch(boardUrl,{cache:'no-store'});
-          if(boardResponse.ok){
-            const boardPayload=await boardResponse.json();
-            if(boardPayload.type==='ok' && Array.isArray(boardPayload.data)){
-              boardRow=boardPayload.data.find(d=>d.train?.id && d.train.id===next.raw.train?.id) || null;
-            }
-          }
-        } catch (_) { /* Board label is helpful context, not the route-verification source. */ }
+        const boardRow=next.raw;
         $('boardDestination').textContent=boardRow?.destination?.name || 'Not available';
         // traini.ac exposes the departure's ordered calling_points rather than a separate
         // verbatim National Rail 'via' string. Show those stops so Greenwich is visible.
@@ -117,12 +121,12 @@
         const platform=next.raw.platform?.type==='known'?` · Platform ${next.raw.platform.number}`:'';
         const delay=next.raw.departs.delay_minutes;
         const headcode=next.raw.train?.headcode ? ` · Train ${next.raw.train.headcode}` : '';
-        $('detail').textContent=`Verified to call at Greenwich · ${fmt(next.time)}${headcode}${platform}. The destination above is the train's advertised final destination, not its calling-point list. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
+        $('detail').textContent=`Deptford → Greenwich → Maze Hill appears in this departure's forward calling points · ${fmt(next.time)}${headcode}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
       }else{
-        setChoice('dlr','TAKE THE DLR','No verified direct Cannon Street–Greenwich train is predicted within 10 minutes of your arrival.');
+        setChoice('dlr','TAKE THE DLR','No Cannon Street departure with Deptford → Greenwich → Maze Hill in its forward calling points is predicted within 10 minutes of your arrival.');
         $('departure').textContent='None';$('wait').textContent='10+ min';
         $('boardDestination').textContent='—';$('boardTrain').textContent='No suitable train identified';$('boardVia').textContent='—';
-        $('detail').textContent='Head to Bank for the DLR to Greenwich. Only direct passenger journeys explicitly identified as CST to GNW are considered. If that cannot be verified, take the DLR.';
+        $('detail').textContent='Head to Bank for the DLR to Greenwich. A train qualifies only when its own forward calling points contain Deptford (DFP), then Greenwich (GNW), then Maze Hill (MZH). If that sequence cannot be verified, take the DLR.';
       }
       $('status').textContent=`Updated ${fmt(new Date())} · London time`;$('dot').className='dot';
     }catch(err){
