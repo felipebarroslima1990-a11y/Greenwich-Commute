@@ -68,18 +68,16 @@
     return null;
   }
   function hasForwardGreenwichRoute(departure){
-    const leaves=eventTime(departure?.departs);
-    if(!leaves) return false;
-    // Check only this Cannon Street departure's own forward calling points.
-    // The required directional fingerprint is Deptford -> Greenwich -> Maze Hill.
-    // This rejects a return working where the same train later visits these
-    // stations in the opposite order. The stations need not be consecutive.
-    const calls=(departure?.calling_points||[]).filter(point => {
-      if(point?.station?.type!=='station') return false;
-      const at=eventTime(point.time);
-      return !!at && at > leaves;
-    });
-    const codes=calls.map(point=>point.station.crs);
+    // The API's calling_points array is already the ordered list of stops
+    // for THIS departure from Cannon Street. Do not re-filter those stops
+    // using estimated times: a stop can have delayed_no_estimate (or no
+    // live estimate), and that must not erase it from the route.
+    // calling_at=GNW on the request independently requires Greenwich later
+    // on this departure. The ordered station sequence rejects the return
+    // working: Deptford -> Greenwich -> Maze Hill, in this order.
+    const codes=(departure?.calling_points||[])
+      .map(point=>point?.station?.crs)
+      .filter(Boolean);
     const deptford=codes.indexOf('DFP');
     const greenwich=deptford>=0 ? codes.indexOf('GNW',deptford+1) : -1;
     const mazeHill=greenwich>=0 ? codes.indexOf('MZH',greenwich+1) : -1;
@@ -87,7 +85,7 @@
   }
   async function refresh(){
     const btn=$('refresh');btn.disabled=true;$('status').textContent='Refreshing live trains…';$('dot').className='dot';
-    setChoice('wait','CHECKING…','Checking Cannon Street departures for the correct forward station sequence.');
+    setChoice('wait','CHECKING…','Checking each departure’s ordered calling points (without filtering out stops that lack live time estimates).');
     $('boardDestination').textContent='—';$('boardTrain').textContent='Matching the exact train service';$('boardVia').textContent='Checking the train’s calling points';
     try{
       const now=new Date();
@@ -121,12 +119,12 @@
         const platform=next.raw.platform?.type==='known'?` · Platform ${next.raw.platform.number}`:'';
         const delay=next.raw.departs.delay_minutes;
         const headcode=next.raw.train?.headcode ? ` · Train ${next.raw.train.headcode}` : '';
-        $('detail').textContent=`Deptford → Greenwich → Maze Hill appears in this departure's forward calling points · ${fmt(next.time)}${headcode}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
+        $('detail').textContent=`Deptford → Greenwich → Maze Hill appears in this departure's ordered calling points · ${fmt(next.time)}${headcode}${platform}. ${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
       }else{
-        setChoice('dlr','TAKE THE DLR','No Cannon Street departure with Deptford → Greenwich → Maze Hill in its forward calling points is predicted within 10 minutes of your arrival.');
+        setChoice('dlr','TAKE THE DLR','No Cannon Street departure with Deptford → Greenwich → Maze Hill in its ordered calling points is predicted within 10 minutes of your arrival.');
         $('departure').textContent='None';$('wait').textContent='10+ min';
         $('boardDestination').textContent='—';$('boardTrain').textContent='No suitable train identified';$('boardVia').textContent='—';
-        $('detail').textContent='Head to Bank for the DLR to Greenwich. A train qualifies only when its own forward calling points contain Deptford (DFP), then Greenwich (GNW), then Maze Hill (MZH). If that sequence cannot be verified, take the DLR.';
+        $('detail').textContent='Head to Bank for the DLR to Greenwich. A train qualifies only when its own ordered calling points contain Deptford (DFP), then Greenwich (GNW), then Maze Hill (MZH). If that sequence cannot be verified, take the DLR.';
       }
       $('status').textContent=`Updated ${fmt(new Date())} · London time`;$('dot').className='dot';
     }catch(err){
