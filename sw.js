@@ -1,4 +1,4 @@
-const CACHE = 'greenwich-home-v11';
+const CACHE = 'greenwich-home-v12';
 const APP_FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));

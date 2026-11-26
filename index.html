@@ -78,7 +78,7 @@
     const station=point?.station;
     if(station?.crs) return station.crs;
     const name=(station?.name||'').toLowerCase();
-    if(name==='deptford') return 'DFP';
+    if(name==='deptford') return 'DEP';
     if(name==='greenwich') return 'GNW';
     if(name==='maze hill') return 'MZH';
     return null;
@@ -86,7 +86,7 @@
   function routeDirection(dep){
     const points=Array.isArray(dep?.calling_points)?dep.calling_points:[];
     const codes=points.map(callingPointCode);
-    const deptford=codes.indexOf('DFP');
+    const deptford=codes.indexOf('DEP');
     const greenwich=codes.indexOf('GNW');
     const mazeHill=codes.indexOf('MZH');
     return {callsGreenwich:greenwich!==-1, correct:deptford!==-1 && greenwich!==-1 && mazeHill!==-1 && deptford<greenwich && greenwich<mazeHill, codes};
