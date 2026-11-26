@@ -1,15 +1,18 @@
-# Greenwich Home (v6)
+# Greenwich Home (v10)
 
-A small home-screen web app for choosing between Cannon Street and the DLR when leaving the office.
+A home-screen web app for choosing between Cannon Street and the DLR when leaving the office.
 
 ## Decision rule
 - Assumes a 15-minute walk from the office to Cannon Street platforms.
-- Recommends Cannon Street only when a direct passenger journey from station code CST to station code GNW is explicitly returned by the traini.ac journey API, and its predicted departure is after estimated arrival but less than 10 minutes later.
-- Connecting journeys, other destinations, missing route information, API errors, and unverified results are rejected; the app recommends the DLR instead.
-- Uses live data and refreshes when opened or when the refresh button is tapped.
-- Separately reads the Cannon Street departure board and matches the exact train by train ID to display its advertised destination, platform/headcode, and ordered calling points. The API does not document a separate verbatim passenger-facing “via” string, so the app labels the ordered stops “Via / calling points”; this makes the Greenwich stop visible without pretending to reproduce the exact board wording. The journey endpoint remains the source for checking the Greenwich stop.
+- Requests Cannon Street departures with `calling_at=GNW`, which means the train calls at Greenwich later on this same departure.
+- Independently confirms that Greenwich (GNW) appears in that departure's own forward `calling_points`. No Deptford → Greenwich → Maze Hill sequence is required.
+- Uses an actual or forecast departure time when available. For `no_information`, it uses the scheduled time and labels it as timetable-based. It does not use scheduled time for `delayed_no_estimate` or cancelled services.
+- Requires departure at or after the estimated arrival and no later than 10 minutes after arrival.
+- Displays the destination and forward calling points for the selected service.
+- Includes expandable diagnostics: API rows returned, forward Greenwich calls, usable departure times, qualifying trains, rejection counts, and examples.
+- If no suitable train can be verified, recommends the DLR.
 
 ## Deploy
-Upload the contents of the `greenwich-commute-app` folder to the existing Netlify site (publish directory `.`). This is v4 and uses a new service-worker cache name to avoid retaining the old app cache.
+Upload the contents of this folder to the existing Netlify site (publish directory `.`). The service-worker cache has been bumped to v10.
 
 Personal, non-commercial use. Live data from traini.ac.
