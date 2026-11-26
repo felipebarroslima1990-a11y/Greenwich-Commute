@@ -1,4 +1,4 @@
-# Greenwich Home (v10)
+# Greenwich Home (v11)
 
 A home-screen web app for choosing between Cannon Street and the DLR when leaving the office.
 
@@ -13,6 +13,9 @@ A home-screen web app for choosing between Cannon Street and the DLR when leavin
 - If no suitable train can be verified, recommends the DLR.
 
 ## Deploy
-Upload the contents of this folder to the existing Netlify site (publish directory `.`). The service-worker cache has been bumped to v10.
+Upload the contents of this folder to the existing Netlify site (publish directory `.`). The service-worker cache has been bumped to v11.
 
 Personal, non-commercial use. Live data from traini.ac.
+
+
+Version 11 direction validation: a qualifying Cannon Street departure must have forward calling points in this order: Deptford (DFP), Greenwich (GNW), then Maze Hill (MZH). This rejects circular services that reach Greenwich only after first travelling via Maze Hill. Diagnostics show the count rejected for wrong direction.

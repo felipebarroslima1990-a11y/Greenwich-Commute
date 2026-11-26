@@ -53,6 +53,7 @@
       <div class="diag-grid">
         <div><small>API departures returned</small><strong id="diagReturned">—</strong></div>
         <div><small>Call at Greenwich</small><strong id="diagGreenwich">—</strong></div>
+        <div><small>Correct direction (Deptford → Greenwich → Maze Hill)</small><strong id="diagDirection">—</strong></div>
         <div><small>Usable departure times</small><strong id="diagTimes">—</strong></div>
         <div><small>Within your 10-minute window</small><strong id="diagWindow">—</strong></div>
       </div>
@@ -73,10 +74,22 @@
   const fmt = d => new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/London'}).format(d);
   const mins = n => `${Math.max(0,Math.round(n))} min`;
   function setChoice(kind,title,subtitle){$('choice').className=`choice ${kind}`;$('choice').textContent=title;$('subtitle').textContent=subtitle;}
-  function forwardCallsGreenwich(dep){
-    return Array.isArray(dep?.calling_points) && dep.calling_points.some(p =>
-      p?.station?.crs === 'GNW' || (p?.station?.type === 'station' && /greenwich/i.test(p?.station?.name || ''))
-    );
+  function callingPointCode(point){
+    const station=point?.station;
+    if(station?.crs) return station.crs;
+    const name=(station?.name||'').toLowerCase();
+    if(name==='deptford') return 'DFP';
+    if(name==='greenwich') return 'GNW';
+    if(name==='maze hill') return 'MZH';
+    return null;
+  }
+  function routeDirection(dep){
+    const points=Array.isArray(dep?.calling_points)?dep.calling_points:[];
+    const codes=points.map(callingPointCode);
+    const deptford=codes.indexOf('DFP');
+    const greenwich=codes.indexOf('GNW');
+    const mazeHill=codes.indexOf('MZH');
+    return {callsGreenwich:greenwich!==-1, correct:deptford!==-1 && greenwich!==-1 && mazeHill!==-1 && deptford<greenwich && greenwich<mazeHill, codes};
   }
   function departureTime(dep){
     const estimate=dep?.departs?.estimate;
@@ -95,6 +108,7 @@
   function setDiagnostics(d){
     $('diagReturned').textContent=d.returned;
     $('diagGreenwich').textContent=d.greenwich;
+    $('diagDirection').textContent=d.directionValid;
     $('diagTimes').textContent=d.usableTimes;
     $('diagWindow').textContent=d.inWindow;
     $('diagReasons').textContent=`Rejected: ${d.reasons.join(' · ') || 'none'}`;
@@ -116,18 +130,21 @@
       const payload=await response.json();
       if(payload.type!=='ok' || !Array.isArray(payload.data)) throw new Error(payload.error?.message||'Unexpected departure data response');
       const rows=payload.data;
-      const reasons={notPassenger:0,noGreenwich:0,notAdvertised:0,cancelled:0,delayedNoEstimate:0,noUsableTime:0,outsideWindow:0};
+      const reasons={notPassenger:0,noGreenwich:0,wrongDirection:0,notAdvertised:0,cancelled:0,delayedNoEstimate:0,noUsableTime:0,outsideWindow:0};
       const examples=[];
-      let greenwichCount=0,usableTimes=0;
+      let greenwichCount=0,directionValid=0,usableTimes=0;
       const candidates=[];
       for(const row of rows){
         const name=row?.destination?.name || 'unknown destination';
         const headcode=row?.train?.headcode || 'no headcode';
         if(row?.service_class!=='passenger'){reasons.notPassenger++;continue;}
         if(row?.advertised===false){reasons.notAdvertised++;continue;}
-        // This local check confirms the API filter against this train's own forward stops.
-        if(!forwardCallsGreenwich(row)){reasons.noGreenwich++;if(examples.length<3)examples.push(`${headcode} ${name}: no GNW in forward calls`);continue;}
+        // Greenwich must be reached on the direct Greenwich branch, not after looping via Maze Hill.
+        const route=routeDirection(row);
+        if(!route.callsGreenwich){reasons.noGreenwich++;if(examples.length<5)examples.push(`${headcode} ${name}: no GNW in forward calls`);continue;}
         greenwichCount++;
+        if(!route.correct){reasons.wrongDirection++;if(examples.length<5)examples.push(`${headcode} ${name}: wrong order (${route.codes.filter(Boolean).join(' → ')})`);continue;}
+        directionValid++;
         const result=departureTime(row);
         if(!result.time){
           if(result.reason==='cancelled')reasons.cancelled++;
@@ -141,8 +158,8 @@
         candidates.push({raw:row,time:result.time,timeSource:result.source});
       }
       candidates.sort((a,b)=>a.time-b.time);
-      setDiagnostics({returned:rows.length,greenwich:greenwichCount,usableTimes,inWindow:candidates.length,reasons:[
-        `non-passenger ${reasons.notPassenger}`,`not advertised ${reasons.notAdvertised}`,`no forward GNW ${reasons.noGreenwich}`,
+      setDiagnostics({returned:rows.length,greenwich:greenwichCount,directionValid,usableTimes,inWindow:candidates.length,reasons:[
+        `non-passenger ${reasons.notPassenger}`,`not advertised ${reasons.notAdvertised}`,`no forward GNW ${reasons.noGreenwich}`,`wrong direction ${reasons.wrongDirection}`,
         `cancelled ${reasons.cancelled}`,`delayed/no estimate ${reasons.delayedNoEstimate}`,`no usable time ${reasons.noUsableTime}`,`outside window ${reasons.outsideWindow}`
       ],examples});
       $('arrival').textContent=fmt(arrival);
@@ -154,12 +171,12 @@
         const headcode=row?.train?.headcode;
         const platform=row?.platform?.type==='known'?` · Platform ${row.platform.number}`:'';
         $('boardTrain').textContent=`${headcode?`Train ${headcode}`:'Train reference unavailable'}${platform}`;
-        setChoice('cannon','CANNON STREET','This departure calls at Greenwich after leaving Cannon Street.');
+        setChoice('cannon','CANNON STREET','This departure follows Deptford → Greenwich → Maze Hill from Cannon Street.');
         $('departure').textContent=fmt(next.time);$('wait').textContent=mins(wait);
         const delay=row?.departs?.delay_minutes;
         $('detail').textContent=`Predicted departure ${fmt(next.time)}${headcode?` · Train ${headcode}`:''}${platform}. ${next.timeSource==='timetable'?'No live estimate is available; using the published timetable. ':''}${delay>0?`Currently running ${delay} min late. `:''}Allow for the 15-minute walk.`;
       }else{
-        setChoice('dlr','TAKE THE DLR','No verified Cannon Street train calling at Greenwich is predicted within your 10-minute window.');
+        setChoice('dlr','TAKE THE DLR','No verified Cannon Street train follows Deptford → Greenwich → Maze Hill within your 10-minute window.');
         $('departure').textContent='None';$('wait').textContent='10+ min';
         $('boardDestination').textContent='—';$('boardTrain').textContent='No suitable train identified';$('boardVia').textContent='—';
         $('detail').textContent='Head to Bank for the DLR to Greenwich. Open Departure diagnostics below to see how many trains the API returned and why they did not qualify.';
@@ -169,7 +186,7 @@
       setChoice('dlr','TAKE THE DLR','I couldn’t verify a suitable live Cannon Street train.');
       $('arrival').textContent='—';$('departure').textContent='Unavailable';$('wait').textContent='—';
       $('boardDestination').textContent='—';$('boardTrain').textContent='Train details unavailable';$('boardVia').textContent='Calling points unavailable';
-      setDiagnostics({returned:'—',greenwich:'—',usableTimes:'—',inWindow:'—',reasons:[err.message],examples:[]});
+      setDiagnostics({returned:'—',greenwich:'—',directionValid:'—',usableTimes:'—',inWindow:'—',reasons:[err.message],examples:[]});
       $('detail').textContent='Live train data could not be verified, so the app is recommending the DLR rather than guessing.';
       $('status').textContent=`Live data unavailable: ${err.message}`;$('dot').className='dot bad';
     }finally{btn.disabled=false;}
